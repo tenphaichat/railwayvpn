@@ -8,6 +8,13 @@ echo "===================================================="
 echo " Xray VLESS-WS Server - Ubuntu Railway Mode"
 echo "===================================================="
 
+# Toi uu network buffer va ulimit cho toc do toi da
+ulimit -n 65535 2>/dev/null || true
+sysctl -w net.core.rmem_max=16777216 2>/dev/null || true
+sysctl -w net.core.wmem_max=16777216 2>/dev/null || true
+sysctl -w net.core.rmem_default=262144 2>/dev/null || true
+sysctl -w net.core.wmem_default=262144 2>/dev/null || true
+
 cleanup() {
     echo "[*] Stopping Xray & Cloudflared..."
     if [ -n "${CHILD_PID:-}" ] && kill -0 "$CHILD_PID" 2>/dev/null; then

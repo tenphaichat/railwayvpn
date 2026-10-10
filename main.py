@@ -68,10 +68,12 @@ def main():
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     # Auto-decode CLUSTER_CODE from Railway Environment Variables if provided
-    raw_cluster_code = (os.getenv("CLUSTER_CODE") or "").strip()
-    if raw_cluster_code.startswith("CLUSTER:"):
+    raw_cluster_code = (os.getenv("CLUSTER_CODE") or "").strip().strip('"').strip("'")
+    if raw_cluster_code:
+        b64_cluster = raw_cluster_code
+        if b64_cluster.startswith("CLUSTER:"):
+            b64_cluster = b64_cluster[len("CLUSTER:"):].strip()
         try:
-            b64_cluster = raw_cluster_code[len("CLUSTER:"):].strip()
             decoded_cluster_str = base64.b64decode(b64_cluster).decode("utf-8")
             from urllib.parse import unquote
             try:
@@ -101,23 +103,23 @@ def main():
     raw_init_token = (os.getenv("TUNNEL_TOKEN") or "").strip()
     init_token_match = re.search(r"eyJ[A-Za-z0-9_\-=]+", raw_init_token)
     clean_init_token = init_token_match.group(0) if init_token_match else raw_init_token
-    default_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, clean_init_token)) if clean_init_token else str(uuid.uuid4())
-    default_run_mode = "named_tunnel" if clean_init_token else "quick_tunnel"
+    default_uuid = os.getenv("XRAY_UUID") or (str(uuid.uuid5(uuid.NAMESPACE_DNS, clean_init_token)) if clean_init_token else str(uuid.uuid4()))
+    default_run_mode = os.getenv("RUN_MODE") or ("named_tunnel" if clean_init_token else "quick_tunnel")
 
     default_configs = {
-        "PORT": "127.0.0.1:8888",
+        "PORT": os.getenv("PORT", "127.0.0.1:8888"),
         "XRAY_UUID": default_uuid,
-        "FAKE_SNI": "api24-normal-alisg.tiktokv.com#FreeTiktok,172.67.168.158#FreeVina Ko Nen",
-        "WS_PATH": "/vless",
-        "WS_HOST": "trycloudflare.com",
-        "TRANSPORT": "websocket",
-        "XHTTP_MODE": "packet-up",
-        "ENABLE_WARP": "false",
-        "WEBHOOK_URL": "",
-        "TUNNEL_TOKEN": "",
-        "COUNTRY_CODE": "",
-        "PORT_MODE": "both",
-        "PROTOCOL": "vless",
+        "FAKE_SNI": os.getenv("FAKE_SNI", "api24-normal-alisg.tiktokv.com#FreeTiktok,172.67.168.158#FreeVina Ko Nen"),
+        "WS_PATH": os.getenv("WS_PATH", "/vless"),
+        "WS_HOST": os.getenv("WS_HOST", "trycloudflare.com"),
+        "TRANSPORT": os.getenv("TRANSPORT", "websocket"),
+        "XHTTP_MODE": os.getenv("XHTTP_MODE", "packet-up"),
+        "ENABLE_WARP": os.getenv("ENABLE_WARP", "false"),
+        "WEBHOOK_URL": os.getenv("WEBHOOK_URL", ""),
+        "TUNNEL_TOKEN": clean_init_token,
+        "COUNTRY_CODE": os.getenv("COUNTRY_CODE", ""),
+        "PORT_MODE": os.getenv("PORT_MODE", "both"),
+        "PROTOCOL": os.getenv("PROTOCOL", "vless"),
         "RUN_MODE": default_run_mode
     }
 
@@ -141,6 +143,32 @@ def main():
                     f.write(f"{key}={value}\n")
             print("[+] Generated .env configuration.")
         else:
+            # Đồng bộ các biến môi trường từ Railway/CLUSTER_CODE vào file .env
+            update_map = {}
+            for k in ("TUNNEL_TOKEN", "WS_HOST", "XRAY_UUID", "RUN_MODE", "PROTOCOL", "PORT_MODE", "WS_PATH", "FAKE_SNI"):
+                env_val = os.getenv(k)
+                if env_val:
+                    update_map[k] = env_val
+            if update_map:
+                try:
+                    lines = []
+                    seen = set()
+                    with open(env_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            raw_k = line.strip().split("=", 1)[0].strip()
+                            if raw_k in update_map:
+                                lines.append(f"{raw_k}={update_map[raw_k]}\n")
+                                seen.add(raw_k)
+                            else:
+                                lines.append(line)
+                                seen.add(raw_k)
+                    for uk, uv in update_map.items():
+                        if uk not in seen:
+                            lines.append(f"{uk}={uv}\n")
+                    with open(env_path, "w", encoding="utf-8") as f:
+                        f.writelines(lines)
+                except Exception:
+                    pass
             print("[*] Found .env configuration.")
 
     IS_RAILWAY = True
@@ -426,9 +454,10 @@ def main():
 
         def build_stream_settings(transport, path_override=None):
             use_path = path_override or WS_PATH
+            sockopt = {"tcpNoDelay": True, "tcpFastOpen": True}
             if transport == "xhttp":
-                return {"network": "xhttp", "security": "none", "xhttpSettings": {"path": use_path, "mode": "auto"}}
-            return {"network": "ws", "security": "none", "wsSettings": {"path": use_path, "headers": {}}}
+                return {"network": "xhttp", "security": "none", "xhttpSettings": {"path": use_path, "mode": "auto"}, "sockopt": sockopt}
+            return {"network": "ws", "security": "none", "wsSettings": {"path": use_path, "headers": {}}, "sockopt": sockopt}
 
         def make_inbound(listen, port, transport, proto="vless", path_override=None):
             if proto == "vmess":
@@ -439,7 +468,7 @@ def main():
                 "port": port,
                 "listen": listen,
                 "protocol": proto,
-                "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls"], "routeOnly": True},
                 "settings": settings,
                 "streamSettings": build_stream_settings(transport, path_override=path_override)
             }
@@ -587,12 +616,17 @@ def main():
                         "port": port,
                         "listen": ip,
                         "protocol": "vless",
+                        "sniffing": {"enabled": True, "destOverride": ["http", "tls"], "routeOnly": True},
                         "settings": {
                             "clients": [{"id": UUID, "level": 0}],
                             "decryption": "none",
                             "fallbacks": fallbacks
                         },
-                        "streamSettings": {"network": "tcp", "security": "none"}
+                        "streamSettings": {
+                            "network": "tcp",
+                            "security": "none",
+                            "sockopt": {"tcpNoDelay": True, "tcpFastOpen": True}
+                        }
                     })
                     inbounds.append(make_inbound("127.0.0.1", vless_ws_port, "websocket", proto="vless", path_override=WS_PATH))
                     if PROTOCOL == "both":
@@ -601,15 +635,14 @@ def main():
                     inbounds.append(make_inbound(ip, port, TRANSPORTS[0], proto=PROTOCOL, path_override=WS_PATH))
             xray_config = {
                 "log": {"loglevel": "error", "access": "none"},
-                "dns": {
-                    "servers": [
-                        "1.1.1.1",
-                        "8.8.8.8",
-                        "localhost"
-                    ]
-                },
                 "inbounds": inbounds,
-                "outbounds": [{"protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}}]
+                "outbounds": [
+                    {
+                        "protocol": "freedom",
+                        "settings": {"domainStrategy": "AsIs"},
+                        "streamSettings": {"sockopt": {"tcpNoDelay": True}}
+                    }
+                ]
             }
             if ENABLE_WARP and wgcf_outbound:
                 xray_config["outbounds"].insert(0, wgcf_outbound)
