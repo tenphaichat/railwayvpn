@@ -67,13 +67,42 @@ def main():
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
-    # =========================================
-    # CONFIG SERVER (Cloudflare Tunnel)
-    # =========================================
+    # Auto-decode CLUSTER_CODE from Railway Environment Variables if provided
+    raw_cluster_code = (os.getenv("CLUSTER_CODE") or "").strip()
+    if raw_cluster_code.startswith("CLUSTER:"):
+        try:
+            b64_cluster = raw_cluster_code[len("CLUSTER:"):].strip()
+            decoded_cluster_str = base64.b64decode(b64_cluster).decode("utf-8")
+            from urllib.parse import unquote
+            try:
+                decoded_cluster_str = unquote(decoded_cluster_str)
+            except Exception:
+                pass
+            c_obj = json.loads(decoded_cluster_str)
+            if c_obj.get("t"):
+                os.environ["TUNNEL_TOKEN"] = str(c_obj["t"]).strip()
+            if c_obj.get("d"):
+                os.environ["WS_HOST"] = str(c_obj["d"]).strip()
+            if c_obj.get("u"):
+                os.environ["XRAY_UUID"] = str(c_obj["u"]).strip()
+            if c_obj.get("p"):
+                os.environ["PROTOCOL"] = str(c_obj["p"]).strip()
+            if c_obj.get("pm"):
+                os.environ["PORT_MODE"] = str(c_obj["pm"]).strip()
+            if c_obj.get("wp"):
+                os.environ["WS_PATH"] = str(c_obj["wp"]).strip()
+            if c_obj.get("sni"):
+                os.environ["FAKE_SNI"] = str(c_obj["sni"]).strip()
+            os.environ["RUN_MODE"] = "named_tunnel"
+            print(f"[+] Successfully auto-configured from CLUSTER_CODE (Domain: {c_obj.get('d')})")
+        except Exception as _ce:
+            print(f"[!] Warning: Could not decode CLUSTER_CODE: {_ce}")
+
     raw_init_token = (os.getenv("TUNNEL_TOKEN") or "").strip()
     init_token_match = re.search(r"eyJ[A-Za-z0-9_\-=]+", raw_init_token)
     clean_init_token = init_token_match.group(0) if init_token_match else raw_init_token
     default_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, clean_init_token)) if clean_init_token else str(uuid.uuid4())
+    default_run_mode = "named_tunnel" if clean_init_token else "quick_tunnel"
 
     default_configs = {
         "PORT": "127.0.0.1:8888",
@@ -89,7 +118,7 @@ def main():
         "COUNTRY_CODE": "",
         "PORT_MODE": "both",
         "PROTOCOL": "vless",
-        "RUN_MODE": "quick_tunnel"
+        "RUN_MODE": default_run_mode
     }
 
     def get_os_env(name):
@@ -130,10 +159,10 @@ def main():
     logger = None
     try:
         init_run_mode = (get_os_env("RUN_MODE") or "quick_tunnel").strip().lower()
-        raw_web_port = os.getenv("WEB_PORT") or (RAILWAY_WEB_PORT if (IS_RAILWAY or init_run_mode != "direct") else None) or "9999"
+        raw_web_port = os.getenv("WEB_PORT") or (RAILWAY_WEB_PORT if (RAILWAY_WEB_PORT not in ("8888", "127.0.0.1:8888") and (IS_RAILWAY or init_run_mode != "direct")) else None) or "9999"
         clean_web_port = str(raw_web_port).split(":")[-1].strip()
         web_port = int(clean_web_port) if clean_web_port.isdigit() else 9999
-        if not IS_RAILWAY and web_port == 8888:
+        if web_port == 8888:
             web_port = 9999
         web_password = os.getenv("WEB_PASSWORD", "") or None
         logger = RealtimeLogger(port=web_port, password=web_password, action_callback=on_dashboard_action)
@@ -221,12 +250,11 @@ def main():
             print(f"[!] Unknown RUN_MODE '{RUN_MODE}', falling back to 'quick_tunnel'.")
             RUN_MODE = "quick_tunnel"
 
+        if TUNNEL_TOKEN and RUN_MODE == "quick_tunnel":
+            RUN_MODE = "named_tunnel"
         if IS_RAILWAY and RUN_MODE == "direct":
             RUN_MODE = "named_tunnel" if TUNNEL_TOKEN else "quick_tunnel"
-        if IS_RAILWAY:
-            PORT_ENV = os.getenv("XRAY_PORT", "127.0.0.1:18888")
-        elif RUN_MODE in ("quick_tunnel", "named_tunnel"):
-            PORT_ENV = os.getenv("XRAY_PORT", "127.0.0.1:8888")
+        PORT_ENV = os.getenv("XRAY_PORT", "127.0.0.1:8888")
 
         def wait_for_config_fix(err_msg):
             print(err_msg)
@@ -573,6 +601,13 @@ def main():
                     inbounds.append(make_inbound(ip, port, TRANSPORTS[0], proto=PROTOCOL, path_override=WS_PATH))
             xray_config = {
                 "log": {"loglevel": "error", "access": "none"},
+                "dns": {
+                    "servers": [
+                        "1.1.1.1",
+                        "8.8.8.8",
+                        "localhost"
+                    ]
+                },
                 "inbounds": inbounds,
                 "outbounds": [{"protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}}]
             }
@@ -665,7 +700,7 @@ def main():
                     return None
                 if RUN_MODE == "named_tunnel":
                     print("[*] Launching Cloudflare Named Tunnel (token mode, HTTP/2)...")
-                    named_tunnel_args = [CLF_BIN, "tunnel", "--protocol", "http2", "run", "--token", TUNNEL_TOKEN]
+                    named_tunnel_args = [CLF_BIN, "tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", TUNNEL_TOKEN]
                     return subprocess.Popen(
                         named_tunnel_args,
                         stdout=subprocess.PIPE,
@@ -678,7 +713,7 @@ def main():
                 tunnel_protocol = "http2" if RUN_MODE == "quick_tunnel" else "auto"
                 print(f"[*] Launching Cloudflare Tunnel ({tunnel_protocol}) pointing to http://{CLOUDFLARE_TARGET_IP}:{CLOUDFLARE_TARGET_PORT}...")
                 return subprocess.Popen(
-                    [CLF_BIN, "tunnel", "--protocol", tunnel_protocol, "--url", f"http://{CLOUDFLARE_TARGET_IP}:{CLOUDFLARE_TARGET_PORT}"],
+                    [CLF_BIN, "tunnel", "--no-autoupdate", "--protocol", tunnel_protocol, "--url", f"http://{CLOUDFLARE_TARGET_IP}:{CLOUDFLARE_TARGET_PORT}"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,

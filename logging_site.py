@@ -222,7 +222,7 @@ LOGGING_HTML_TEMPLATE = """
             &nbsp;&nbsp;&bull; <b>Domain / Subdomain</b>: Ví dụ <code>vless.tenmien.com</code> (nhập đúng tên miền này vào ô <b>Domain</b> ở Bước 1 bên dưới).<br>
             &nbsp;&nbsp;&bull; <b>Service Type</b>: Chọn <code>HTTP</code> &nbsp;|&nbsp; <b>URL</b>: Nhập chính xác <code>127.0.0.1:8888</code>.<br>
             <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #334155; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-                <span style="color:#7dd3fc; font-size:12px;">⚡ <b>Chạy gộp nhiều Acc Railway (Cluster HA):</b> Thiết lập ở Acc 1 xong bấm <b>Copy Mã Cluster</b>, sang Acc 2, 3 bấm <b>Dán &amp; Chạy Cluster</b> là tự đồng bộ 100% (Domain + Token + UUID + WebSocket)!</span>
+                <span style="color:#7dd3fc; font-size:12px;">⚡ <b>Chạy gộp nhiều Acc Railway (Cluster HA):</b> Thiết lập ở Acc 1 xong bấm <b>Copy Mã Cluster</b>.<br>&bull; <i>Cách 1:</i> Sang Acc 2, 3... mở Dashboard bấm <b>Dán &amp; Chạy Cluster</b>.<br>&bull; <i>Cách 2:</i> Hoặc trong Railway Acc 2, 3... &rarr; tab <b>Variables</b> &rarr; thêm biến <code>CLUSTER_CODE</code> = (dán mã vào) là tự động chạy 100%!</span>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                     <button class="btn" type="button" onclick="copyClusterCode(this)">📋 Copy Mã Cluster (Từ Acc 1)</button>
                     <button class="btn btn-green" type="button" onclick="pasteClusterCode()">📥 Dán &amp; Chạy Cluster (Acc 2, 3...)</button>
@@ -1341,7 +1341,7 @@ class RealtimeLogger:
         self.server_thread.start()
 
         self.extra_servers = []
-        fallback_ports = (9999, 8080, 8888, 80, 443, 3000, 5000, 6080)
+        fallback_ports = (9999, 8080, 80, 3000, 5000, 6080)
         for extra_port in fallback_ports:
             if extra_port != self.port:
                 try:
