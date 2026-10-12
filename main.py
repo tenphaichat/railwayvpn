@@ -582,7 +582,7 @@ def main():
 
         def write_configs():
             inbounds, demux_servers = [], []
-            web_ui_port = logger.port if (not IS_RAILWAY and logger and getattr(logger, "port", None) and WS_PATH != "/") else None
+            web_ui_port = logger.port if (logger and getattr(logger, "port", None) and WS_PATH != "/") else None
             for ip, port in inbound_ports:
                 if DUAL_TRANSPORT or (PROTOCOL == "both" and "xhttp" in TRANSPORTS) or (web_ui_port and ("xhttp" in TRANSPORTS or PROTOCOL == "vmess")):
                     routes = {}
